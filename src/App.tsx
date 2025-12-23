@@ -2,7 +2,7 @@ import React, { useRef, useState, Suspense, useLayoutEffect, useCallback, useEff
 import { Canvas, useLoader, useThree, RootState } from '@react-three/fiber';
 import { Center, TransformControls, OrbitControls, Grid } from '@react-three/drei'; // AxesHelper は削除
 // InputAdornment を追加
-import { Button, Stack, Divider, Paper, Typography, TextField, Box, ButtonGroup, Select, MenuItem, FormControl, InputLabel, SelectChangeEvent, InputAdornment } from '@mui/material';
+import { Button, Stack, Divider, Paper, Typography, TextField, Box, ButtonGroup, Select, MenuItem, FormControl, InputLabel, SelectChangeEvent, InputAdornment, Fab, Switch, FormControlLabel } from '@mui/material';
 import * as THREE from 'three';
 import { STLLoader, OBJLoader } from 'three-stdlib';
 import Papa from 'papaparse';
@@ -10,6 +10,18 @@ import './App.css';
 import { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { v4 as uuidv4 } from 'uuid'; // UUID生成用
 import ControlPanelRight from './ControlPanelRight'; // Import the new panel
+import SliceGallery, { SliceImage } from './SliceGallery';
+import KeyboardShortcutsHelp from './KeyboardShortcutsHelp';
+import MeasurementPanel, { MeasurementResult } from './MeasurementPanel';
+import { MeasurementTool, MeasurementResults as MeasurementResultsDisplay } from './MeasurementTool';
+import { MeasurementPoint } from './MeasurementTool';
+import AlignmentTools, { AlignmentAction } from './AlignmentTools';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import CollectionsIcon from '@mui/icons-material/Collections';
+import UndoIcon from '@mui/icons-material/Undo';
+import RedoIcon from '@mui/icons-material/Redo';
+import { useHistoryActions } from './useHistory';
+import RotationCenterIndicator from './RotationCenterIndicator';
 
 // Interfaces for CSV data (Exported)
 export interface WeldPoint { id: string; process: string; x: number; y: number; z: number; gun?: string; notes?: string; }
@@ -38,7 +50,7 @@ const WeldPointObject: React.FC<{ point: WeldPoint } & ObjectComponentProps> = (
 };
 const LocatorObject: React.FC<{ locator: Locator } & ObjectComponentProps> = ({ locator, isSelected, onSelect }) => {
   const meshRef = useRef<THREE.Mesh>(null!); const color = isSelected ? 'yellow' : 'green'; const rotation = new THREE.Euler(degToRad(locator.rx ?? 0), degToRad(locator.ry ?? 0), degToRad(locator.rz ?? 0));
-  return ( <mesh ref={meshRef} name={`locator-${locator.id}`} userData={{ type: 'locator' }} key={`loc-${locator.id}`} position={[locator.x, locator.y, locator.z]} rotation={rotation} onClick={(e) => { e.stopPropagation(); onSelect(meshRef.current); }} > <boxGeometry args={[20, 8, 8]} /> <meshStandardMaterial color={color} emissive={isSelected ? color : undefined} emissiveIntensity={isSelected ? 0.5 : 0} /> </mesh> );
+  return ( <mesh ref={meshRef} name={`locator-${locator.id}`} userData={{ type: 'locator' }} key={`loc-${locator.id}`} position={[locator.x, locator.y, locator.z]} rotation={rotation} onClick={(e) => { e.stopPropagation(); onSelect(meshRef.current); }} > <boxGeometry args={[20, 80, 50]} /> <meshStandardMaterial color={color} emissive={isSelected ? color : undefined} emissiveIntensity={isSelected ? 0.5 : 0} /> </mesh> );
 };
 const PinObject: React.FC<{ pin: Pin } & ObjectComponentProps> = ({ pin, isSelected, onSelect }) => {
   const meshRef = useRef<THREE.Mesh>(null!); const color = isSelected ? 'yellow' : 'blue'; const rotation = new THREE.Euler(degToRad(pin.rx ?? 0), degToRad(pin.ry ?? 0), degToRad(pin.rz ?? 0));
@@ -67,6 +79,8 @@ interface PropertiesPanelProps {
   allWeldPoints: WeldPoint[];
   allLocators: Locator[];
   allPins: Pin[];
+  // Alignment handler
+  onAlign?: (action: AlignmentAction) => void;
 }
 type AllKeys = keyof WeldPoint | keyof Locator | keyof Pin;
 const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
@@ -74,7 +88,8 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   onUpdate,
   allWeldPoints,
   allLocators,
-  allPins
+  allPins,
+  onAlign
 }): JSX.Element | null => {
   const [editData, setEditData] = useState<Partial<WeldPoint & Locator & Pin>>({});
   useEffect(() => { setEditData(selectedObjectData ?? {}); }, [selectedObjectData]);
@@ -150,9 +165,9 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
     // No action needed if editedValue is undefined and currentValue was also undefined/null
   };
 
-  const formatForDisplay = (value: string | number | undefined): string => { if (value === undefined || value === null) return ''; if (typeof value === 'number') return value.toFixed(3); return String(value); };
+  const formatForDisplay = (value: string | number | undefined): string => { if (value === undefined || value === null) return ''; if (typeof value === 'number') return Math.round(value).toString(); return String(value); };
   return (
-    <Paper elevation={3} sx={{ position: 'absolute', bottom: 10, left: 10, zIndex: 1, p: 2, minWidth: 250, maxWidth: 300, maxHeight: '40vh', overflowY: 'auto', background: 'rgba(40,40,40,0.8)', color: 'white' }}>
+    <Paper elevation={3} sx={{ position: 'absolute', bottom: 10, left: 10, zIndex: 1, p: 2, minWidth: 250, maxWidth: 300, maxHeight: '60vh', overflowY: 'auto', background: 'rgba(40,40,40,0.8)', color: 'white' }}>
       <Typography variant="h6" gutterBottom>Properties</Typography>
       <Box component="form" noValidate autoComplete="off">
         {/* Removed readOnly from ID field */}
@@ -173,13 +188,28 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
          )}
         <TextField label="Notes" name="notes" value={editData.notes ?? ''} onChange={handleInputChange} onBlur={() => handleBlur('notes')} margin="dense" size="small" fullWidth multiline rows={2} InputProps={{ style: { color: 'white' } }} InputLabelProps={{ style: { color: 'lightgray' } }} sx={{ textarea: { color: 'white !important' }, label: { color: 'lightgray' } }} />
       </Box>
+
+      {/* Alignment Tools */}
+      {onAlign && (
+        <>
+          <Divider sx={{ my: 1, borderColor: 'rgba(255,255,255,0.3)' }} />
+          <AlignmentTools selectedObjectData={selectedObjectData} onAlign={onAlign} />
+        </>
+      )}
     </Paper>
   );
 };
 
 // --- SceneContent Ref Type ---
+export type CameraViewDirection =
+  | 'x' | 'y' | 'z' | 'xyz'      // Basic views
+  | 'top' | 'bottom'              // Top/Bottom
+  | 'left' | 'right'              // Left/Right
+  | 'front' | 'back'              // Front/Back
+  | 'iso' | 'iso-2' | 'iso-3' | 'iso-4'; // Isometric views
+
 export interface SceneContentHandles {
-  setView: (direction: 'x' | 'y' | 'z' | 'xyz') => void;
+  setView: (direction: CameraViewDirection) => void;
 }
 
 // --- Main App Component Wrapper ---
@@ -188,7 +218,14 @@ function App() {
   const [weldPoints, setWeldPoints] = useState<WeldPoint[]>([]);
   const [locators, setLocators] = useState<Locator[]>([]);
   const [pins, setPins] = useState<Pin[]>([]);
-  const [modelData, setModelData] = useState<{ url: string; fileType: 'stl' | 'obj' } | null>(null);
+  // ★修正: 単一モデルから複数モデルの配列へ
+  interface ModelInfo {
+      id: string; // 各モデルを識別するためのユニークID
+      url: string;
+      fileType: 'stl' | 'obj';
+      fileName: string;
+  }
+  const [modelsData, setModelsData] = useState<ModelInfo[]>([]); // 配列に変更
   // Filter states
   const [selectedProcess, setSelectedProcess] = useState<string>('ALL');
   const [availableProcesses, setAvailableProcesses] = useState<string[]>(['ALL']);
@@ -204,6 +241,29 @@ function App() {
   const [showWeldPoints, setShowWeldPoints] = useState<boolean>(true);
   const [showLocators, setShowLocators] = useState<boolean>(true);
   const [showPins, setShowPins] = useState<boolean>(true);
+
+  // Auto focus on selection
+  const [autoFocusOnSelect, setAutoFocusOnSelect] = useState<boolean>(true);
+
+  // Rotation center state
+  const [rotationCenter, setRotationCenter] = useState<THREE.Vector3>(new THREE.Vector3(0, 0, 0));
+  const [showRotationCenter, setShowRotationCenter] = useState<boolean>(true);
+
+  // UI Dialog states
+  const [sliceGalleryOpen, setSliceGalleryOpen] = useState<boolean>(false);
+  const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState<boolean>(false);
+  const [sliceImages, setSliceImages] = useState<SliceImage[]>([]);
+
+  // Measurement tool state
+  const [measurementMode, setMeasurementMode] = useState<'none' | 'distance' | 'angle'>('none');
+  const [measurements, setMeasurements] = useState<MeasurementResult[]>([]);
+  const [measurementPoints, setMeasurementPoints] = useState<MeasurementPoint[]>([]);
+
+  // Undo/Redo history
+  const { canUndo, canRedo, pushHistory, undo: undoHistory, redo: redoHistory } = useHistoryActions(
+    weldPoints, locators, pins,
+    setWeldPoints, setLocators, setPins
+  );
 
 
   // Refs
@@ -269,14 +329,35 @@ function App() {
   const handleModelFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; if (!file) return; const fileType = file.name.split('.').pop()?.toLowerCase();
     if (fileType !== 'stl' && fileType !== 'obj') { alert('Unsupported file type. Please load STL or OBJ files.'); event.target.value = ''; return; }
-    const url = URL.createObjectURL(file); console.log(`Loading ${fileType.toUpperCase()} Model:`, file.name); setModelData({ url, fileType }); event.target.value = '';
+    const url = URL.createObjectURL(file);
+    const fileName = file.name; // ファイル名を取得
+    console.log(`Loading ${fileType?.toUpperCase()} Model: ${fileName}`);
+    // ★修正: 新しいモデルを既存のリストに追加
+    const newModel: ModelInfo = {
+        id: uuidv4(), // ユニークなIDを生成
+        url,
+        fileType: fileType as 'stl' | 'obj',
+        fileName
+    };
+    setModelsData(prevModels => [...prevModels, newModel]); // 既存のモデルリストに追加
+    event.target.value = '';
   };
-
+ 
   const handleLoadClick = (ref: React.RefObject<HTMLInputElement>) => ref.current?.click();
-  useLayoutEffect(() => { return () => { if (modelData?.url) { URL.revokeObjectURL(modelData.url); console.log("Revoked Model Object URL:", modelData.url); } }; }, [modelData]);
-
+  // ★修正: 全てのモデルのブロブURLを解放
+  useLayoutEffect(() => {
+      return () => {
+          modelsData.forEach(model => {
+              if (model.url) {
+                  URL.revokeObjectURL(model.url);
+                  console.log("Revoked Model Object URL:", model.url);
+              }
+          });
+      };
+  }, [modelsData]); // modelsData が変更されたらクリーンアップ関数を更新
+ 
   // --- Camera View Handler ---
-  const handleSetView = (direction: 'x' | 'y' | 'z' | 'xyz') => { sceneContentRef.current?.setView(direction); };
+  const handleSetView = (direction: CameraViewDirection) => { sceneContentRef.current?.setView(direction); };
 
   // --- Process Filter Handler ---
   const handleProcessChange = (event: SelectChangeEvent<string>) => { setSelectedProcess(event.target.value); };
@@ -305,16 +386,12 @@ function App() {
     else if (type === 'pin') data = pins.find(p => p.id === id);
     setSelectedObjectData(data ?? null);
 
-    // Only focus camera if mesh is found
-    if (foundMesh && orbitControlsRef.current) {
+    // Only focus camera if auto-focus is enabled and mesh is found
+    if (autoFocusOnSelect && foundMesh && orbitControlsRef.current) {
         orbitControlsRef.current.target.copy(foundMesh.position);
         orbitControlsRef.current.update();
-    } else if (!foundMesh) {
-        // Optionally reset camera target if mesh isn't found? Or leave as is.
-        // orbitControlsRef.current?.target.set(0, 0, 0);
-        // orbitControlsRef.current?.update();
     }
-  }, [weldPoints, locators, pins]);
+  }, [weldPoints, locators, pins, autoFocusOnSelect]);
 
 
   const handleDeselect = useCallback(() => {
@@ -323,6 +400,138 @@ function App() {
         if (orbitControlsRef.current) { orbitControlsRef.current.target.set(0, 0, 0); orbitControlsRef.current.update(); }
     }
   }, []);
+
+  // --- Delete Handler (moved before useEffect for dependency) ---
+  const deleteSelectedElement = useCallback(() => {
+      if (!selectedObject) {
+          alert("No object selected to delete.");
+          return;
+      }
+      const { type, id } = selectedObject;
+      const confirmation = window.confirm(`Are you sure you want to delete ${type} ${id}?`);
+      if (!confirmation) return;
+
+      pushHistory(); // 履歴に保存
+      if (type === 'weldPoint') setWeldPoints(prev => prev.filter(item => item.id !== id));
+      else if (type === 'locator') setLocators(prev => prev.filter(item => item.id !== id));
+      else if (type === 'pin') setPins(prev => prev.filter(item => item.id !== id));
+
+      console.log(`Deleted ${type} ${id}`);
+      handleDeselect(); // Deselect after deletion
+  }, [selectedObject, pushHistory, handleDeselect]);
+
+  // --- Keyboard Shortcuts Handler ---
+  // Use refs to avoid re-creating event listener on every state change
+  const canUndoRef = useRef(canUndo);
+  const canRedoRef = useRef(canRedo);
+  const selectedObjectRef = useRef(selectedObject);
+  const selectedObjectDataRef = useRef(selectedObjectData);
+  const measurementModeRef = useRef(measurementMode);
+
+  useEffect(() => { canUndoRef.current = canUndo; }, [canUndo]);
+  useEffect(() => { canRedoRef.current = canRedo; }, [canRedo]);
+  useEffect(() => { selectedObjectRef.current = selectedObject; }, [selectedObject]);
+  useEffect(() => { selectedObjectDataRef.current = selectedObjectData; }, [selectedObjectData]);
+  useEffect(() => { measurementModeRef.current = measurementMode; }, [measurementMode]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Ignore if typing in an input field
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
+      // Help dialog
+      if (event.key === '?') {
+        setShortcutsHelpOpen(prev => !prev);
+        return;
+      }
+
+      // Escape to deselect and close dialogs
+      if (event.key === 'Escape') {
+        if (shortcutsHelpOpen) setShortcutsHelpOpen(false);
+        else if (sliceGalleryOpen) setSliceGalleryOpen(false);
+        else if (measurementModeRef.current !== 'none') {
+          setMeasurementMode('none');
+        }
+        else {
+          // Deselect object
+          setSelectedObject(null);
+          setSelectedMesh(null);
+          setSelectedObjectData(null);
+          if (orbitControlsRef.current) {
+            orbitControlsRef.current.target.set(0, 0, 0);
+            orbitControlsRef.current.update();
+          }
+        }
+        return;
+      }
+
+      // Delete key
+      if ((event.key === 'Delete' || event.key === 'Del') && selectedObjectRef.current) {
+        deleteSelectedElement();
+        return;
+      }
+
+      // Duplicate (Ctrl+D)
+      if (event.ctrlKey && event.key === 'd' && selectedObjectRef.current && selectedObjectDataRef.current) {
+        event.preventDefault();
+        pushHistory();
+        const newId = uuidv4();
+        const offset = new THREE.Vector3(10, 10, 10);
+        const data = selectedObjectDataRef.current as any;
+        const newPos = new THREE.Vector3(data.x + offset.x, data.y + offset.y, data.z + offset.z);
+        const newItem = { ...data, id: newId, x: newPos.x, y: newPos.y, z: newPos.z };
+
+        if (selectedObjectRef.current.type === 'weldPoint') {
+          setWeldPoints(prev => [...prev, newItem as WeldPoint]);
+        } else if (selectedObjectRef.current.type === 'locator') {
+          setLocators(prev => [...prev, newItem as Locator]);
+        } else if (selectedObjectRef.current.type === 'pin') {
+          setPins(prev => [...prev, newItem as Pin]);
+        }
+        return;
+      }
+
+      // Undo (Ctrl+Z)
+      if (event.ctrlKey && event.key === 'z' && !event.shiftKey && canUndoRef.current) {
+        event.preventDefault();
+        undoHistory();
+        return;
+      }
+
+      // Redo (Ctrl+Shift+Z or Ctrl+Y)
+      if ((event.ctrlKey && event.key === 'z' && event.shiftKey || event.ctrlKey && event.key.toLowerCase() === 'y') && canRedoRef.current) {
+        event.preventDefault();
+        redoHistory();
+        return;
+      }
+
+      // Camera view shortcuts
+      if (sceneContentRef.current) {
+        if (event.key.toLowerCase() === 'x' && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+          handleSetView('x');
+        } else if (event.key.toLowerCase() === 'y' && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+          handleSetView('y');
+        } else if (event.key.toLowerCase() === 'z' && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+          handleSetView('z');
+        }
+      }
+
+      // Toggle transform modes
+      if (selectedObjectRef.current && transformControlsRef.current) {
+        const tc = transformControlsRef.current;
+        if (event.key.toLowerCase() === 'g') tc.setMode('translate');
+        else if (event.key.toLowerCase() === 'r') tc.setMode('rotate');
+        else if (event.key.toLowerCase() === 's') tc.setMode('scale');
+        else if (event.key === '+') tc.setSize(Math.min(tc.size + 0.1, 2));
+        else if (event.key === '-') tc.setSize(Math.max(tc.size - 0.1, 0.1));
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleSetView, undoHistory, redoHistory, deleteSelectedElement, pushHistory, shortcutsHelpOpen, sliceGalleryOpen]);
 
   // --- Data Update Handlers ---
   const updateObjectData = useCallback((id: string, type: 'weldPoint' | 'locator' | 'pin', updates: Partial<WeldPoint | Locator | Pin>) => {
@@ -352,11 +561,12 @@ function App() {
 
   const handleTransformEnd = useCallback(() => {
     if (!selectedObject || !selectedMesh) return;
+    pushHistory(); // 履歴に保存
     const { position, rotation } = selectedMesh; const { type, id } = selectedObject;
     let updates: Partial<WeldPoint | Locator | Pin> = { x: position.x, y: position.y, z: position.z };
     if (type !== 'weldPoint') { updates = { ...updates, rx: radToDeg(rotation.x), ry: radToDeg(rotation.y), rz: radToDeg(rotation.z) }; }
     updateObjectData(id, type, updates);
-  }, [selectedObject, selectedMesh, updateObjectData]);
+  }, [selectedObject, selectedMesh, updateObjectData, pushHistory]);
 
   // --- Add/Delete Handlers ---
   const getCameraLookAtPoint = (distance = 100): THREE.Vector3 => {
@@ -370,8 +580,22 @@ function App() {
   };
 
   const addElement = (type: 'weldPoint' | 'locator' | 'pin') => {
+      pushHistory(); // 履歴に保存
       const newId = uuidv4();
-      const position = getCameraLookAtPoint(100); // Add slightly in front of camera view
+      let position = new THREE.Vector3(); // 新しい位置を格納する変数
+
+      // ★追加: 選択中のLTがあるか確認し、位置を計算
+      if (type === 'locator' && selectedObject?.type === 'locator' && selectedObjectData) {
+          const selectedLocator = selectedObjectData as Locator;
+          // 選択中のLTの位置から (0, 100, 100) オフセット
+          position.set(selectedLocator.x + 0, selectedLocator.y + 100, selectedLocator.z + 100);
+          console.log(`Duplicating Locator ${selectedLocator.id} with offset (0, 100, 100). New position:`, position);
+      } else {
+          // 選択中のLTがない場合、または他のタイプの場合、カメラ位置を基準にする (既存ロジック)
+          position = getCameraLookAtPoint(100);
+          console.log(`Adding new ${type} based on camera view. Position:`, position);
+      }
+      // ★修正: commonProps の位置を計算した position に基づく
       const commonProps = { id: newId, process: 'NEW', x: position.x, y: position.y, z: position.z, notes: '' };
       let newItem: WeldPoint | Locator | Pin;
 
@@ -393,23 +617,6 @@ function App() {
       //     const newMesh = scene.getObjectByName(`${type}-${newId}`); // Need access to scene or a way to find the mesh
       //     if (newMesh) handleSelect(type, newId, newMesh);
       // }, 100); // Delay to allow mesh creation
-  };
-
-  const deleteSelectedElement = () => {
-      if (!selectedObject) {
-          alert("No object selected to delete.");
-          return;
-      }
-      const { type, id } = selectedObject;
-      const confirmation = window.confirm(`Are you sure you want to delete ${type} ${id}?`);
-      if (!confirmation) return;
-
-      if (type === 'weldPoint') setWeldPoints(prev => prev.filter(item => item.id !== id));
-      else if (type === 'locator') setLocators(prev => prev.filter(item => item.id !== id));
-      else if (type === 'pin') setPins(prev => prev.filter(item => item.id !== id));
-
-      console.log(`Deleted ${type} ${id}`);
-      handleDeselect(); // Deselect after deletion
   };
 
 
@@ -442,6 +649,107 @@ function App() {
     }
   };
 
+  // --- Measurement Tool Handlers ---
+  const handleMeasurementComplete = (result: { distance?: number; angle?: number; points: MeasurementPoint[] }) => {
+    const newMeasurement: MeasurementResult = {
+      id: uuidv4(),
+      type: result.distance !== undefined ? 'distance' : 'angle',
+      value: result.distance ?? result.angle ?? 0,
+      timestamp: new Date()
+    };
+    setMeasurements(prev => [...prev, newMeasurement]);
+    setMeasurementPoints(prev => [...prev, ...result.points]);
+    setMeasurementMode('none');
+  };
+
+  const handleMeasurementDelete = (id: string) => {
+    setMeasurements(prev => prev.filter(m => m.id !== id));
+  };
+
+  const handleClearMeasurements = () => {
+    setMeasurements([]);
+    setMeasurementPoints([]);
+  };
+
+  const handleMeasurementCancel = () => {
+    setMeasurementMode('none');
+  };
+
+  // --- Alignment Tool Handler ---
+  const handleAlignment = (action: AlignmentAction) => {
+    if (!selectedObject || !selectedObjectData) return;
+
+    pushHistory(); // 履歴に保存
+
+    const currentPos = { x: selectedObjectData.x, y: selectedObjectData.y, z: selectedObjectData.z };
+    let updates: Partial<WeldPoint | Locator | Pin> = {};
+
+    switch (action.type) {
+      case 'snap-grid':
+        const gridSize = action.value || 10;
+        updates = {
+          x: Math.round(currentPos.x / gridSize) * gridSize,
+          y: Math.round(currentPos.y / gridSize) * gridSize,
+          z: Math.round(currentPos.z / gridSize) * gridSize
+        };
+        break;
+
+      case 'align-x':
+        updates = { x: action.value ?? 0 };
+        break;
+
+      case 'align-y':
+        updates = { y: action.value ?? 0 };
+        break;
+
+      case 'align-z':
+        updates = { z: action.value ?? 0 };
+        break;
+
+      case 'distribute':
+        // TODO: Implement distribution for multiple selected objects
+        break;
+    }
+
+    if (Object.keys(updates).length > 0) {
+      updateObjectData(selectedObject.id, selectedObject.type, updates);
+    }
+  };
+
+  // --- Rotation Center Handlers ---
+  const handleFocusOnSelected = useCallback(() => {
+    if (selectedObjectData && orbitControlsRef.current) {
+      // selectedObjectDataの座標を使用（meshのpositionよりも信頼性が高い）
+      const newCenter = new THREE.Vector3(selectedObjectData.x, selectedObjectData.y, selectedObjectData.z);
+      orbitControlsRef.current.target.copy(newCenter);
+      orbitControlsRef.current.update();
+      setRotationCenter(newCenter);
+      console.log('Focus on selected object:', selectedObjectData.id, 'at', newCenter);
+    } else if (selectedMesh && orbitControlsRef.current) {
+      // フォールバック: meshのpositionを使用
+      const newCenter = selectedMesh.position.clone();
+      orbitControlsRef.current.target.copy(newCenter);
+      orbitControlsRef.current.update();
+      setRotationCenter(newCenter);
+      console.log('Focus on selected mesh at', newCenter);
+    }
+  }, [selectedObjectData, selectedMesh]);
+
+  const handleResetRotationCenter = useCallback(() => {
+    const origin = new THREE.Vector3(0, 0, 0);
+    if (orbitControlsRef.current) {
+      orbitControlsRef.current.target.copy(origin);
+      orbitControlsRef.current.update();
+    }
+    setRotationCenter(origin);
+  }, []);
+
+  // --- Double-click handler for scene ---
+  const handleSceneDoubleClick = useCallback(() => {
+    // Double-click on empty space resets rotation center to origin
+    handleResetRotationCenter();
+  }, [handleResetRotationCenter]);
+
 
   return (
     <div className="App">
@@ -469,16 +777,59 @@ function App() {
             <Button size="small" variant="outlined" onClick={() => downloadCSV(filteredPins, 'pins_export.csv')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)' }}>Export Filtered Pins</Button>
             <Divider />
              <Typography variant="caption" sx={{ color: 'lightgray', mb: 0.5 }}>Camera Views</Typography>
-             <ButtonGroup variant="outlined" size="small" aria-label="camera view controls">
-                <Button onClick={() => handleSetView('x')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)' }}>X</Button>
-                <Button onClick={() => handleSetView('y')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)' }}>Y</Button>
-                <Button onClick={() => handleSetView('z')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)' }}>Z</Button>
-                <Button onClick={() => handleSetView('xyz')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)' }}>XYZ</Button>
+             {/* Basic Views Row */}
+             <ButtonGroup variant="outlined" size="small" sx={{ mb: 0.5 }}>
+                <Button onClick={() => handleSetView('top')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', fontSize: '0.7rem' }}>上</Button>
+                <Button onClick={() => handleSetView('bottom')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', fontSize: '0.7rem' }}>下</Button>
+                <Button onClick={() => handleSetView('front')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', fontSize: '0.7rem' }}>前</Button>
+                <Button onClick={() => handleSetView('back')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', fontSize: '0.7rem' }}>後</Button>
+             </ButtonGroup>
+             <ButtonGroup variant="outlined" size="small" sx={{ mb: 0.5 }}>
+                <Button onClick={() => handleSetView('left')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', fontSize: '0.7rem' }}>左</Button>
+                <Button onClick={() => handleSetView('right')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', fontSize: '0.7rem' }}>右</Button>
+                <Button onClick={() => handleSetView('x')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', fontSize: '0.7rem' }}>X</Button>
+                <Button onClick={() => handleSetView('y')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', fontSize: '0.7rem' }}>Y</Button>
+             </ButtonGroup>
+             {/* Isometric Views Row */}
+             <ButtonGroup variant="outlined" size="small" sx={{ mb: 0.5 }}>
+                <Button onClick={() => handleSetView('z')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', fontSize: '0.7rem' }}>Z</Button>
+                <Button onClick={() => handleSetView('iso')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', fontSize: '0.7rem' }}>等角1</Button>
+                <Button onClick={() => handleSetView('iso-2')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', fontSize: '0.7rem' }}>等角2</Button>
+                <Button onClick={() => handleSetView('iso-3')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', fontSize: '0.7rem' }}>等角3</Button>
+             </ButtonGroup>
+             <ButtonGroup variant="outlined" size="small" sx={{ mb: 0.5 }}>
+                <Button onClick={() => handleSetView('iso-4')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', fontSize: '0.7rem' }}>等角4</Button>
+                <Button onClick={() => handleSetView('xyz')} sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', fontSize: '0.7rem' }}>全</Button>
              </ButtonGroup>
              <Divider sx={{ my: 1, borderColor: 'rgba(255,255,255,0.5)' }} />
              <Typography variant="caption" sx={{ color: 'lightgray', mb: 0.5 }}>Camera Clipping</Typography>
              <TextField label="Near Plane" type="number" size="small" value={nearClip} onChange={handleNearClipChange} InputProps={{ style: { color: 'white' }, inputProps: { min: 0.01, step: 0.1 }, startAdornment: <InputAdornment position="start" sx={{color: 'lightgray'}}>N:</InputAdornment>, }} InputLabelProps={{ style: { color: 'lightgray' } }} sx={{ input: { '-webkit-text-fill-color': 'white !important' }, label: { color: 'lightgray' }, mb: 1 }} />
              <TextField label="Far Plane" type="number" size="small" value={farClip} onChange={handleFarClipChange} InputProps={{ style: { color: 'white' }, inputProps: { min: nearClip + 0.1, step: 100 }, startAdornment: <InputAdornment position="start" sx={{color: 'lightgray'}}>F:</InputAdornment>, }} InputLabelProps={{ style: { color: 'lightgray' } }} sx={{ input: { '-webkit-text-fill-color': 'white !important' }, label: { color: 'lightgray' } }} />
+             <FormControlLabel control={<Switch size="small" checked={autoFocusOnSelect} onChange={(e) => setAutoFocusOnSelect(e.target.checked)} />} label="選択時フォーカス" sx={{ color: 'white', mt: 0.5 }} />
+             <Divider sx={{ my: 1, borderColor: 'rgba(255,255,255,0.5)' }} />
+             <Typography variant="caption" sx={{ color: 'lightgray', mb: 0.5 }}>回転中心</Typography>
+             <Button
+               size="small"
+               variant="outlined"
+               onClick={handleFocusOnSelected}
+               disabled={!selectedMesh}
+               sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', fontSize: '0.7rem' }}
+             >
+               選択オブジェクトを中心に
+             </Button>
+             <Button
+               size="small"
+               variant="outlined"
+               onClick={handleResetRotationCenter}
+               sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', fontSize: '0.7rem' }}
+             >
+               原点にリセット
+             </Button>
+             <FormControlLabel
+               control={<Switch size="small" checked={showRotationCenter} onChange={(e) => setShowRotationCenter(e.target.checked)} />}
+               label="中心を表示"
+               sx={{ color: 'white', mt: 0.5 }}
+             />
         </Stack>
       </div>
 
@@ -488,6 +839,7 @@ function App() {
            allWeldPoints={weldPoints} // Pass full list
            allLocators={locators}     // Pass full list
            allPins={pins}           // Pass full list
+           onAlign={handleAlignment}
        />
 
      {/* Canvas Container - Adjusted width for right panel */}
@@ -496,7 +848,7 @@ function App() {
         <Canvas camera={{ position: [0, 50, 150], fov: 50 }}>
           <SceneContent
             ref={sceneContentRef}
-            modelData={modelData}
+            modelData={modelsData.length > 0 ? modelsData[0] : null}
             weldPoints={filteredWeldPoints}
             locators={filteredLocators}
             pins={filteredPins}
@@ -515,6 +867,15 @@ function App() {
             showWeldPoints={showWeldPoints}
             showLocators={showLocators}
             showPins={showPins}
+            // Pass measurement tool props
+            measurementMode={measurementMode}
+            onMeasurementComplete={handleMeasurementComplete}
+            onMeasurementCancel={handleMeasurementCancel}
+            // Pass rotation center props
+            rotationCenter={rotationCenter}
+            showRotationCenter={showRotationCenter}
+            onSceneDoubleClick={handleSceneDoubleClick}
+            setRotationCenter={setRotationCenter}
           />
         </Canvas>
       </div>
@@ -532,6 +893,71 @@ function App() {
         handleSelect={handleSelect} // Pass down selection handler
         addElement={addElement}
         deleteSelectedElement={deleteSelectedElement}
+        modelFileName={modelsData.length > 0 ? modelsData[0].fileName : null}
+      />
+
+      {/* --- Help & Gallery Buttons (Bottom Left) --- */}
+      <Box sx={{ position: 'absolute', bottom: 10, left: 10, zIndex: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button
+            variant="contained"
+            size="small"
+            startIcon={<UndoIcon />}
+            onClick={undoHistory}
+            disabled={!canUndo}
+            sx={{ bgcolor: 'rgba(100, 100, 100, 0.8)', '&:hover': { bgcolor: 'rgba(120, 120, 120, 0.9)' }, '&:disabled': { bgcolor: 'rgba(60, 60, 60, 0.5)' } }}
+          >
+            アンドウ
+          </Button>
+          <Button
+            variant="contained"
+            size="small"
+            startIcon={<RedoIcon />}
+            onClick={redoHistory}
+            disabled={!canRedo}
+            sx={{ bgcolor: 'rgba(100, 100, 100, 0.8)', '&:hover': { bgcolor: 'rgba(120, 120, 120, 0.9)' }, '&:disabled': { bgcolor: 'rgba(60, 60, 60, 0.5)' } }}
+          >
+            リドゥ
+          </Button>
+        </Box>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button
+            variant="contained"
+            size="small"
+            startIcon={<HelpOutlineIcon />}
+            onClick={() => setShortcutsHelpOpen(true)}
+            sx={{ bgcolor: 'rgba(100, 100, 100, 0.8)', '&:hover': { bgcolor: 'rgba(120, 120, 120, 0.9)' } }}
+          >
+            ?
+          </Button>
+          <Button
+            variant="contained"
+            size="small"
+            startIcon={<CollectionsIcon />}
+            onClick={() => setSliceGalleryOpen(true)}
+            sx={{ bgcolor: 'rgba(100, 100, 100, 0.8)', '&:hover': { bgcolor: 'rgba(120, 120, 120, 0.9)' } }}
+          >
+            ギャラリー
+          </Button>
+        </Box>
+      </Box>
+
+      {/* --- Measurement Panel (Top Center) --- */}
+      <MeasurementPanel
+        mode={measurementMode}
+        onModeChange={setMeasurementMode}
+        measurements={measurements}
+        onDelete={handleMeasurementDelete}
+        onClearAll={handleClearMeasurements}
+      />
+
+      {/* --- Dialogs --- */}
+      <KeyboardShortcutsHelp open={shortcutsHelpOpen} onClose={() => setShortcutsHelpOpen(false)} />
+      <SliceGallery
+        open={sliceGalleryOpen}
+        onClose={() => setSliceGalleryOpen(false)}
+        images={sliceImages}
+        onDelete={(id) => setSliceImages(prev => prev.filter(img => img.id !== id))}
       />
     </div>
   );
@@ -560,6 +986,15 @@ interface SceneContentProps {
   showWeldPoints: boolean;
   showLocators: boolean;
   showPins: boolean;
+  // --- 追加: Measurement tool props ---
+  measurementMode: 'none' | 'distance' | 'angle';
+  onMeasurementComplete: (result: { distance?: number; angle?: number; points: MeasurementPoint[] }) => void;
+  onMeasurementCancel: () => void;
+  // --- 追加: Rotation center props ---
+  rotationCenter: THREE.Vector3;
+  showRotationCenter: boolean;
+  onSceneDoubleClick: () => void;
+  setRotationCenter: React.Dispatch<React.SetStateAction<THREE.Vector3>>;
 }
 
 const SceneContent = forwardRef<SceneContentHandles, SceneContentProps>(({
@@ -581,7 +1016,16 @@ const SceneContent = forwardRef<SceneContentHandles, SceneContentProps>(({
   showModel,
   showWeldPoints,
   showLocators,
-  showPins
+  showPins,
+  // --- 追加: Measurement tool props ---
+  measurementMode,
+  onMeasurementComplete,
+  onMeasurementCancel,
+  // --- 追加: Rotation center props ---
+  rotationCenter,
+  showRotationCenter,
+  onSceneDoubleClick,
+  setRotationCenter
 }, ref): JSX.Element => { // Added return type
 
   const { camera, scene, controls } = useThree((state: RootState) => ({
@@ -600,9 +1044,23 @@ const SceneContent = forwardRef<SceneContentHandles, SceneContentProps>(({
     }
   }, [camera, nearClip, farClip]); // camera, nearClip, farClip が変更されたら実行
 
+  // --- 追加: 回転中心をOrbitControlsのターゲットと同期 ---
+  useEffect(() => {
+    if (controls && controls instanceof OrbitControlsImpl) {
+      // orbitControlsRef経由でターゲットが変更された場合にstateを更新
+      const interval = setInterval(() => {
+        const currentTarget = controls.target;
+        if (!currentTarget.equals(rotationCenter)) {
+          setRotationCenter(currentTarget.clone());
+        }
+      }, 100);
+      return () => clearInterval(interval);
+    }
+  }, [controls, rotationCenter, setRotationCenter]);
+
   // Expose setView method via ref
   useImperativeHandle(ref, () => ({
-    setView: (direction: 'x' | 'y' | 'z' | 'xyz') => {
+    setView: (direction: CameraViewDirection) => {
       if (!controls || !(controls instanceof OrbitControlsImpl) || !camera) return;
       const box = new THREE.Box3(); let objectsFound = false;
       const objectsToFrame: THREE.Object3D[] = [];
@@ -617,15 +1075,34 @@ const SceneContent = forwardRef<SceneContentHandles, SceneContentProps>(({
       controls.target.copy(center);
       const offset = cameraZ > 0 ? cameraZ : 10;
       camera.up.set(0, 1, 0);
+
       switch (direction) {
+        // Basic axes
         case 'x': camera.position.set(center.x + offset, center.y, center.z); break;
         case 'y': camera.position.set(center.x, center.y + offset, center.z + 0.01); camera.up.set(0, 0, -1); break;
         case 'z': camera.position.set(center.x, center.y, center.z + offset); break;
-        case 'xyz': default: const diagOffset = offset * 0.707; camera.position.set(center.x + diagOffset, center.y + diagOffset, center.z + diagOffset); break;
+
+        // Named views
+        case 'top': camera.position.set(center.x, center.y + offset, center.z); break;
+        case 'bottom': camera.position.set(center.x, center.y - offset, center.z); camera.up.set(0, 0, 1); break;
+        case 'front': camera.position.set(center.x, center.y, center.z + offset); break;
+        case 'back': camera.position.set(center.x, center.y, center.z - offset); break;
+        case 'left': camera.position.set(center.x - offset, center.y, center.z); break;
+        case 'right': camera.position.set(center.x + offset, center.y, center.z); break;
+
+        // Isometric views
+        case 'xyz':
+        case 'iso':
+        default: const diagOffset = offset * 0.707; camera.position.set(center.x + diagOffset, center.y + diagOffset, center.z + diagOffset); break;
+        case 'iso-2': camera.position.set(center.x - diagOffset, center.y + diagOffset, center.z + diagOffset); break;
+        case 'iso-3': camera.position.set(center.x - diagOffset, center.y + diagOffset, center.z - diagOffset); break;
+        case 'iso-4': camera.position.set(center.x + diagOffset, center.y + diagOffset, center.z - diagOffset); break;
       }
+
       console.log(`Direction: ${direction}, Camera Up Before LookAt:`, camera.up.toArray());
       camera.lookAt(center);
-      if (direction === 'y') { camera.up.set(0, 0, -1); } else { camera.up.set(0, 1, 0); }
+      // Fix up vector for certain views
+      if (direction === 'y' || direction === 'bottom') { camera.up.set(0, 0, -1); } else { camera.up.set(0, 1, 0); }
       controls.update();
       console.log(`Set view to ${direction}. Center:`, center, "Size:", size, "Cam Pos:", camera.position);
     }
@@ -650,11 +1127,12 @@ const SceneContent = forwardRef<SceneContentHandles, SceneContentProps>(({
 
   return ( // Ensure return statement is present
     <>
-      <mesh scale={1000} onClick={handleDeselect} > <planeGeometry /> <meshBasicMaterial visible={false} /> </mesh>
+      <mesh scale={1000} onClick={handleDeselect} onDoubleClick={onSceneDoubleClick} > <planeGeometry /> <meshBasicMaterial visible={false} /> </mesh>
       <ambientLight intensity={0.8} />
       <directionalLight position={[10, 10, 5]} intensity={1} />
       <directionalLight position={[-10, -10, -5]} intensity={0.5} />
       <axesHelper args={[50]} />
+      <RotationCenterIndicator position={[rotationCenter.x, rotationCenter.y, rotationCenter.z]} show={showRotationCenter} />
       <Suspense fallback={null}>
         {/* Model Visibility */}
         {showModel && modelData && ( <Model url={modelData.url} fileType={modelData.fileType} /> )}
@@ -678,8 +1156,14 @@ const SceneContent = forwardRef<SceneContentHandles, SceneContentProps>(({
           <TransformControls ref={transformControlsRef} object={selectedMesh} mode={selectedObject?.type === 'weldPoint' ? 'translate' : 'translate'} onMouseUp={handleTransformEnd} size={0.5} />
         )}
       </Suspense>
-      <OrbitControls makeDefault ref={orbitControlsRef} />
+      <OrbitControls makeDefault ref={orbitControlsRef} enableDamping={false} />
       <Grid infiniteGrid rotation={[Math.PI / 2, 0, 0]} cellSize={100} sectionSize={1000} sectionColor={"lightblue"} fadeDistance={5000} />
+      {/* Measurement Tool */}
+      <MeasurementTool
+        mode={measurementMode}
+        onComplete={onMeasurementComplete}
+        onCancel={onMeasurementCancel}
+      />
     </>
   );
 });
